@@ -85,22 +85,22 @@ export default class RolloverTodosPlugin extends Plugin {
         moment(
           file.path.replace(dailyNoteRegexMatch, "$1"),
           format,
-          true
-        ).isValid()
+          true,
+        ).isValid(),
       )
       .filter((file) => file.basename)
       .filter((file) =>
         this.getFileMoment(file, folder, format).isSameOrBefore(
           todayMoment,
-          "day"
-        )
+          "day",
+        ),
       );
 
     // sort by date
     const sorted = dailyNoteFiles.sort(
       (a, b) =>
         this.getFileMoment(b, folder, format).valueOf() -
-        this.getFileMoment(a, folder, format).valueOf()
+        this.getFileMoment(a, folder, format).valueOf(),
     );
     return sorted[1];
   }
@@ -136,7 +136,7 @@ export default class RolloverTodosPlugin extends Plugin {
     ///console.log('testing')
     const templateContents = await this.app.vault.read(file);
     const allHeadings = Array.from(templateContents.matchAll(/#{1,} .*/g)).map(
-      ([heading]) => heading
+      ([heading]) => heading,
     );
 
     if (allHeadings.length > 0) {
@@ -195,11 +195,15 @@ export default class RolloverTodosPlugin extends Plugin {
     if (!this.isDailyNotesEnabled()) {
       new Notice(
         "RolloverTodosPlugin unable to rollover unfinished todos: Please enable Daily Notes, or Periodic Notes (with daily notes enabled).",
-        10000
+        10000,
       );
     } else {
-      const { templateHeading, deleteOnComplete, removeEmptyTodos, leadingNewLine } =
-        this.settings;
+      const {
+        templateHeading,
+        deleteOnComplete,
+        removeEmptyTodos,
+        leadingNewLine,
+      } = this.settings;
 
       // check if there is a daily note from yesterday
       const lastDailyNote = this.getLastDailyNote();
@@ -212,7 +216,7 @@ export default class RolloverTodosPlugin extends Plugin {
       let todos_yesterday = await this.getAllUnfinishedTodos(lastDailyNote);
 
       console.log(
-        `rollover-daily-todos: ${todos_yesterday.length} todos found in ${lastDailyNote.basename}.md`
+        `rollover-daily-todos: ${todos_yesterday.length} todos found in ${lastDailyNote.basename}.md`,
       );
 
       if (todos_yesterday.length == 0) {
@@ -259,13 +263,13 @@ export default class RolloverTodosPlugin extends Plugin {
           file: file,
           oldContent: `${dailyNoteContent}`,
         };
-        const todos_todayString = `\n${todos_today.join("\n")}`;
+        const todos_todayString = todos_today.join("\n");
 
         // If template heading is selected, try to rollover to template heading
         if (templateHeadingSelected) {
           const contentAddedToHeading = dailyNoteContent.replace(
             templateHeading,
-            `${templateHeading}${leadingNewLine ? '\n' : ''}${todos_todayString}`
+            `${templateHeading}\n${todos_todayString}`,
           );
           if (contentAddedToHeading == dailyNoteContent) {
             templateHeadingNotFoundMessage = `Rollover couldn't find '${templateHeading}' in today's daily not. Rolling todos to end of file.`;
@@ -279,7 +283,12 @@ export default class RolloverTodosPlugin extends Plugin {
           !templateHeadingSelected ||
           templateHeadingNotFoundMessage.length > 0
         ) {
-          dailyNoteContent += todos_todayString;
+          // If file is empty or only whitespace, replace it entirely
+          if (dailyNoteContent.trim() === "") {
+            dailyNoteContent = todos_todayString;
+          } else {
+            dailyNoteContent += "\n" + todos_todayString;
+          }
         }
 
         await this.app.vault.modify(file, dailyNoteContent);
@@ -357,7 +366,7 @@ export default class RolloverTodosPlugin extends Plugin {
         // Check if automatic daily note creation is enabled
         if (!this.settings.rolloverOnFileCreate) return;
         this.rollover(file);
-      })
+      }),
     );
 
     this.addCommand({

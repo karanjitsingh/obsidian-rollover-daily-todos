@@ -1,29 +1,20 @@
 class TodoParser {
-  // Support all unordered list bullet symbols as per spec (https://daringfireball.net/projects/markdown/syntax#list)
+  // Support all unordered list bullet symbols as per spec
   bulletSymbols = ["-", "*", "+"];
 
   // Default completed status markers
   doneStatusMarkers = ["x", "X", "-"];
 
-  // List of strings that include the Markdown content
   #lines;
-
-  // Boolean that encodes whether nested items should be rolled over
   #withChildren;
 
-  // Parse content with segmentation to allow for Unicode grapheme clusters
   #parseIntoChars(content, contentType = "content") {
-    // Use Intl.Segmenter to properly split grapheme clusters if available,
-    // otherwise fall back to Array.from. The fallback should not trigger in
-    // Obsidian since it uses Electron which supports Intl.Segmenter.
     if (typeof Intl !== "undefined" && Intl.Segmenter) {
       const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
       return Array.from(segmenter.segment(content), (s) => s.segment);
     } else {
-      // Array.from() splits surrogate pairs correctly but not complex grapheme clusters
-      // (e.g., 👨‍👩‍👧‍👦 would be split incorrectly) and fail to match.
       console.error(
-        `Intl.Segmenter not available, falling back to Array.from() for ${contentType}`
+        `Intl.Segmenter not available, falling back to Array.from() for ${contentType}`,
       );
       return Array.from(content);
     }
@@ -35,102 +26,217 @@ class TodoParser {
     if (doneStatusMarkers) {
       this.doneStatusMarkers = this.#parseIntoChars(
         doneStatusMarkers,
-        "done status markers"
+        "done status markers",
       );
     }
   }
 
-  // Returns true if string s is a todo-item
-  #isTodo(s) {
-    // Extract the checkbox content
-    const match = s.match(/\s*[*+-] \[(.+?)\]/);
+  // Returns heading level (1-6) or 0 if not a heading
+  #getHeadingLevel(line) {
+    const match = line.match(/^(#{1,6})\s+/);
+    return match ? match[1].length : 0;
+  }
+
+  // Returns true if line is a checked (completed) checkbox
+  #isCheckedCheckbox(line) {
+    const match = line.match(/^\s*[*+-]\s+\[(.+?)\]/);
     if (!match) return false;
 
     const checkboxContent = match[1];
-
-    // Parse content with segmentation to allow for Unicode grapheme clusters
     const contentChars = this.#parseIntoChars(
       checkboxContent,
-      "checkbox content"
+      "checkbox content",
     );
 
-    // Valid checkbox content must be exactly one grapheme cluster
-    if (contentChars.length !== 1) {
-      return false;
-    }
+    if (contentChars.length !== 1) return false;
 
-    const singleChar = contentChars[0];
-
-    // Exclude grapheme modifiers that are not valid as standalone content
-    const graphemeModifiers = ['\u202E', '\u200B', '\u200C', '\u200D'];
-    const hasGraphemeModifier = contentChars.some((char) =>
-      graphemeModifiers.includes(char)
-    );
-    if (hasGraphemeModifier) {
-      return false;
-    }
-
-    // Check if the checkbox content contains any characters that are in doneStatusMarkers
-    const hasDoneMarker = contentChars.some((char) =>
-      this.doneStatusMarkers.includes(char)
-    );
-
-    // Return true (is a todo) if it does NOT contain any done markers
-    return !hasDoneMarker;
+    return contentChars.some((char) => this.doneStatusMarkers.includes(char));
   }
 
-  // Returns true if line after line-number `l` is a nested item
-  #hasChildren(l) {
-    if (l + 1 >= this.#lines.length) {
-      return false;
-    }
-    const indCurr = this.#getIndentation(l);
-    const indNext = this.#getIndentation(l + 1);
-    if (indNext > indCurr) {
-      return true;
-    }
-    return false;
+  // Returns true if line is any checkbox (checked or unchecked)
+  #isCheckbox(line) {
+    return /^\s*[*+-]\s+\[.+?\]/.test(line);
   }
 
-  // Returns a list of strings that are the nested items after line `parentLinum`
-  #getChildren(parentLinum) {
-    const children = [];
-    let nextLinum = parentLinum + 1;
-    while (this.#isChildOf(parentLinum, nextLinum)) {
-      children.push(this.#lines[nextLinum]);
-      nextLinum++;
-    }
-    return children;
+  // Returns true if line is empty or whitespace only
+  #isEmpty(line) {
+    return line.trim() === "";
   }
 
-  // Returns true if line `linum` has more indentation than line `parentLinum`
-  #isChildOf(parentLinum, linum) {
-    if (parentLinum >= this.#lines.length || linum >= this.#lines.length) {
-      return false;
-    }
-    return this.#getIndentation(linum) > this.#getIndentation(parentLinum);
-  }
+  // Build a nested structure from lines
+  #buildTree() {
+    const root = { level: 0, heading: null, children: [], content: [] };
+    const stack = [root];
 
-  // Returns the number of whitespace-characters at beginning of string at line `l`
-  #getIndentation(l) {
-    return this.#lines[l].search(/\S/);
-  }
+    for (const line of this.#lines) {
+      if (this.#isEmpty(line)) continue;
 
-  // Returns a list of strings that represents all the todos along with there potential children
-  getTodos() {
-    let todos = [];
-    for (let l = 0; l < this.#lines.length; l++) {
-      const line = this.#lines[l];
-      if (this.#isTodo(line)) {
-        todos.push(line);
-        if (this.#withChildren && this.#hasChildren(l)) {
-          const cs = this.#getChildren(l);
-          todos = [...todos, ...cs];
-          l += cs.length;
+      const headingLevel = this.#getHeadingLevel(line);
+
+      if (headingLevel > 0) {
+        // Pop stack until we find a parent with lower level
+        while (
+          stack.length > 1 &&
+          stack[stack.length - 1].level >= headingLevel
+        ) {
+          stack.pop();
         }
+
+        const node = {
+          level: headingLevel,
+          heading: line,
+          children: [],
+          content: [],
+        };
+
+        stack[stack.length - 1].children.push(node);
+        stack.push(node);
+      } else {
+        // Content line - add to current heading's content
+        stack[stack.length - 1].content.push(line);
       }
     }
-    return todos;
+
+    return root;
+  }
+
+  // Filter content: remove checked checkboxes, keep unchecked and text
+  #filterContent(content) {
+    return content.filter((line) => !this.#isCheckedCheckbox(line));
+  }
+
+  // Recursively prune empty branches and filter content
+  #pruneTree(node) {
+    // Filter this node's content
+    node.content = this.#filterContent(node.content);
+
+    // Recursively prune children
+    node.children = node.children
+      .map((child) => this.#pruneTree(child))
+      .filter((child) => child !== null);
+
+    // If this is a heading node (not root), check if it has any content
+    if (node.heading !== null) {
+      const hasContent = node.content.length > 0 || node.children.length > 0;
+      if (!hasContent) return null;
+    }
+
+    return node;
+  }
+
+  // Convert tree back to lines with proper formatting
+  #treeToLines(node, isFirstContent = true) {
+    const lines = [];
+
+    // Add heading if present
+    if (node.heading !== null) {
+      lines.push(node.heading);
+    }
+
+    // Group content into checkbox groups and other content
+    const groups = this.#groupContent(node.content);
+
+    let isFirst = node.heading !== null; // skip leading newline if right after heading
+    for (const group of groups) {
+      if (group.isCheckboxGroup) {
+        if (!isFirst) {
+          lines.push(""); // newline before checkbox group (but not right after heading)
+        }
+        lines.push(...group.lines);
+        lines.push(""); // newline after checkbox group
+      } else {
+        lines.push(...group.lines);
+      }
+      isFirst = false;
+    }
+
+    // Process children
+    for (const child of node.children) {
+      const childLines = this.#treeToLines(child);
+      lines.push(...childLines);
+    }
+
+    return lines;
+  }
+
+  // Group consecutive checkboxes together
+  #groupContent(content) {
+    const groups = [];
+    let currentGroup = null;
+
+    for (const line of content) {
+      const isCheckbox = this.#isCheckbox(line);
+
+      if (currentGroup === null) {
+        currentGroup = { isCheckboxGroup: isCheckbox, lines: [line] };
+      } else if (currentGroup.isCheckboxGroup === isCheckbox) {
+        currentGroup.lines.push(line);
+      } else {
+        groups.push(currentGroup);
+        currentGroup = { isCheckboxGroup: isCheckbox, lines: [line] };
+      }
+    }
+
+    if (currentGroup !== null) {
+      groups.push(currentGroup);
+    }
+
+    return groups;
+  }
+
+  // Clean up output: remove consecutive empty lines, trim start/end, remove empty lines before headings
+  #cleanOutput(lines) {
+    // Remove consecutive empty lines and empty lines before headings
+    const cleaned = [];
+    let prevEmpty = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isEmpty = line.trim() === "";
+
+      if (isEmpty) {
+        // Check if next non-empty line is a heading
+        let nextNonEmpty = null;
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim() !== "") {
+            nextNonEmpty = lines[j];
+            break;
+          }
+        }
+        // Skip empty line if it's before a heading or consecutive
+        if (prevEmpty || (nextNonEmpty && /^#{1,6}\s+/.test(nextNonEmpty))) {
+          continue;
+        }
+      }
+
+      cleaned.push(line);
+      prevEmpty = isEmpty;
+    }
+
+    // Trim empty lines from start and end
+    while (cleaned.length > 0 && cleaned[0].trim() === "") {
+      cleaned.shift();
+    }
+    while (cleaned.length > 0 && cleaned[cleaned.length - 1].trim() === "") {
+      cleaned.pop();
+    }
+
+    return cleaned;
+  }
+
+  getTodos() {
+    const tree = this.#buildTree();
+    const pruned = this.#pruneTree(tree);
+
+    if (
+      !pruned ||
+      (pruned.content.length === 0 && pruned.children.length === 0)
+    ) {
+      return [];
+    }
+
+    const lines = this.#treeToLines(pruned);
+    return this.#cleanOutput(lines);
   }
 }
 
